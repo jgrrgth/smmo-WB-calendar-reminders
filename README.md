@@ -15,7 +15,7 @@ A Python GUI app that tracks world boss timers in [Simple MMO](https://web.simpl
 ## Requirements
 
 - Python 3.8+
-- [SMMO API key](https://web.simple-mmo.com/api)
+- [SMMO API key](https://web.simple-mmo.com/p-api/home)
 - Google Cloud project with Calendar API enabled (for calendar features)
 
 ### Python packages
