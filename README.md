@@ -7,7 +7,6 @@ A Python GUI app that tracks world boss timers in [Simple MMO](https://web.simpl
 
 - Fetches all world bosses from the SMMO API
 - Displays boss name, countdown status, and enable time in a sortable table
-- Bosses sorted from soonest to latest
 - Adds upcoming bosses to Google Calendar with a 5-minute popup reminder
 - API key saved locally for convenience
 - Automatic timezone detection
@@ -22,6 +21,7 @@ A Python GUI app that tracks world boss timers in [Simple MMO](https://web.simpl
 
 ```
 requests
+tzlocal
 google-auth
 google-auth-oauthlib
 google-api-python-client
@@ -30,15 +30,14 @@ google-api-python-client
 Install with:
 
 ```bash
-pip install requests google-auth google-auth-oauthlib google-api-python-client
+pip install requests google-auth google-auth-oauthlib google-api-python-client tzlocal
 ```
 
 ## Setup
 
 1. Clone the repo
 2. Install the Python packages above
-3. **Google Calendar (optional):** Place your `credentials.json` from the Google Cloud Console in the project directory
-4. Run the app:
+3. Run the app:
 
 ```bash
 python world_boss.py
