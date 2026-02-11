@@ -37,7 +37,8 @@ pip install requests google-auth google-auth-oauthlib google-api-python-client t
 
 1. Clone the repo
 2. Install the Python packages above
-3. Run the app:
+3. Place your `credentials.json` from the Google Cloud Console in the project directory(if your are using python verison)
+4. Run the app:
 
 ```bash
 python world_boss.py
