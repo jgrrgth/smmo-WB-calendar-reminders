@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.0
+- Added automatic update detection — checks GitHub releases on startup and shows a download link when a new version is available
+
+## v2.2.0
+- Added Do-Not-Disturb time window — bosses whose enable time falls within the configured sleep hours are silently skipped when adding events to Google Calendar
+
+## v2.1.0
+- Added a reminder dropdown next to the "Add to Google Calendar" button with options for 1, 5, and 10 minutes (default: 5 minutes)
+
 ## v2.0.0
 - Replaced terminal interface with a tkinter GUI
 - API key entry with masked input and Save button (auto-loads from file)

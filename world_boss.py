@@ -1,6 +1,10 @@
+import json
 import os
+import sys
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
+import webbrowser
 import requests
 from datetime import datetime, timedelta
 from google.auth.transport.requests import Request
@@ -8,11 +12,23 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+VERSION = "2.3.0"
+GITHUB_REPO = "jgrrgth/smmo-WB-calendar-reminders"
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_FILE = os.path.join(SCRIPT_DIR, "credentials.json")
-TOKEN_FILE = os.path.join(SCRIPT_DIR, "token.json")
-API_KEY_FILE = os.path.join(SCRIPT_DIR, "api_key.txt")
+
+# When running as a PyInstaller bundle, bundled data files are in sys._MEIPASS.
+# User-writable files (token, api key) go next to the executable.
+if getattr(sys, 'frozen', False):
+    BUNDLE_DIR = sys._MEIPASS
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+    APP_DIR = BUNDLE_DIR
+
+CREDENTIALS_FILE = os.path.join(BUNDLE_DIR, "credentials.json")
+TOKEN_FILE = os.path.join(APP_DIR, "token.json")
+API_KEY_FILE = os.path.join(APP_DIR, "api_key.txt")
+SLEEP_ZONE_FILE = os.path.join(APP_DIR, "sleep_zone.json")
 
 
 def get_local_timezone():
@@ -59,10 +75,11 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 
-def create_boss_event(service, boss_name, boss_time):
+def create_boss_event(service, boss_name, boss_time, reminder_minutes=5):
     event = {
-        "summary": f"SMMO World Boss: {boss_name}",
+        "summary": f"🧟 SMMO World Boss: {boss_name}",
         "description": f"{boss_name} is now attackable!",
+        "colorId": "11",
         "start": {
             "dateTime": boss_time.isoformat(),
             "timeZone": LOCAL_TZ,
@@ -74,7 +91,7 @@ def create_boss_event(service, boss_name, boss_time):
         "reminders": {
             "useDefault": False,
             "overrides": [
-                {"method": "popup", "minutes": 5},
+                {"method": "popup", "minutes": reminder_minutes},
             ],
         },
     }
@@ -94,11 +111,14 @@ class WorldBossApp:
         self._build_api_key_frame()
         self._build_fetch_button()
         self._build_boss_table()
+        self._build_sleep_zone_frame()
         self._build_calendar_button()
         self._build_status_bar()
 
         self._load_api_key()
+        self._load_sleep_zone()
         self._update_clock()
+        self._check_for_update()
 
     def _build_api_key_frame(self):
         frame = ttk.LabelFrame(self.root, text="API Key", padding=8)
@@ -137,12 +157,115 @@ class WorldBossApp:
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+    def _build_sleep_zone_frame(self):
+        frame = ttk.LabelFrame(self.root, text="Do not disturb", padding=8)
+        frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        self.sleep_enabled = tk.BooleanVar()
+        ttk.Checkbutton(
+            frame, text="Enable", variable=self.sleep_enabled
+        ).pack(side="left", padx=(0, 12))
+
+        ttk.Label(frame, text="Start:").pack(side="left")
+        self.sleep_start_hour = ttk.Combobox(
+            frame, state="readonly", width=3,
+            values=[str(h) for h in range(1, 13)]
+        )
+        self.sleep_start_hour.set("10")
+        self.sleep_start_hour.pack(side="left", padx=(4, 2))
+
+        self.sleep_start_ampm = ttk.Combobox(
+            frame, state="readonly", width=4, values=["AM", "PM"]
+        )
+        self.sleep_start_ampm.set("PM")
+        self.sleep_start_ampm.pack(side="left", padx=(0, 12))
+
+        ttk.Label(frame, text="End:").pack(side="left")
+        self.sleep_end_hour = ttk.Combobox(
+            frame, state="readonly", width=3,
+            values=[str(h) for h in range(1, 13)]
+        )
+        self.sleep_end_hour.set("8")
+        self.sleep_end_hour.pack(side="left", padx=(4, 2))
+
+        self.sleep_end_ampm = ttk.Combobox(
+            frame, state="readonly", width=4, values=["AM", "PM"]
+        )
+        self.sleep_end_ampm.set("AM")
+        self.sleep_end_ampm.pack(side="left", padx=(0, 12))
+
+        ttk.Button(
+            frame, text="Save", command=self._save_sleep_zone
+        ).pack(side="left")
+
+    def _load_sleep_zone(self):
+        if os.path.exists(SLEEP_ZONE_FILE):
+            try:
+                with open(SLEEP_ZONE_FILE, "r") as f:
+                    data = json.load(f)
+                self.sleep_enabled.set(data.get("enabled", False))
+                self.sleep_start_hour.set(str(data.get("start_hour", 10)))
+                self.sleep_start_ampm.set(data.get("start_ampm", "PM"))
+                self.sleep_end_hour.set(str(data.get("end_hour", 8)))
+                self.sleep_end_ampm.set(data.get("end_ampm", "AM"))
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    def _save_sleep_zone(self):
+        data = {
+            "enabled": self.sleep_enabled.get(),
+            "start_hour": int(self.sleep_start_hour.get()),
+            "start_ampm": self.sleep_start_ampm.get(),
+            "end_hour": int(self.sleep_end_hour.get()),
+            "end_ampm": self.sleep_end_ampm.get(),
+        }
+        with open(SLEEP_ZONE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        self._set_status("Sleep zone settings saved.")
+
+    def _in_sleep_zone(self, dt):
+        start_h = int(self.sleep_start_hour.get())
+        start_ampm = self.sleep_start_ampm.get()
+        end_h = int(self.sleep_end_hour.get())
+        end_ampm = self.sleep_end_ampm.get()
+
+        # Convert 12-hour to 24-hour
+        if start_ampm == "AM":
+            start_24 = 0 if start_h == 12 else start_h
+        else:
+            start_24 = 12 if start_h == 12 else start_h + 12
+
+        if end_ampm == "AM":
+            end_24 = 0 if end_h == 12 else end_h
+        else:
+            end_24 = 12 if end_h == 12 else end_h + 12
+
+        hour = dt.hour
+
+        if start_24 <= end_24:
+            # Same-day range (e.g. 1 AM → 6 AM)
+            return start_24 <= hour < end_24
+        else:
+            # Cross-midnight range (e.g. 10 PM → 8 AM)
+            return hour >= start_24 or hour < end_24
+
     def _build_calendar_button(self):
+        frame = ttk.Frame(self.root)
+        frame.pack(pady=5)
+
         self.cal_btn = ttk.Button(
-            self.root, text="Add to Google Calendar",
+            frame, text="Add to Google Calendar",
             command=self._add_to_calendar, state="disabled"
         )
-        self.cal_btn.pack(pady=5)
+        self.cal_btn.pack(side="left", padx=(0, 8))
+
+        ttk.Label(frame, text="Reminder:").pack(side="left")
+        self.reminder_var = tk.StringVar(value="5 minutes")
+        reminder_combo = ttk.Combobox(
+            frame, textvariable=self.reminder_var, state="readonly", width=12,
+            values=["1 minute", "5 minutes", "10 minutes"]
+        )
+        reminder_combo.pack(side="left", padx=(4, 0))
 
     def _build_status_bar(self):
         self.status_var = tk.StringVar(value="Ready")
@@ -236,6 +359,7 @@ class WorldBossApp:
 
         now = datetime.now()
         created_count = 0
+        skipped_count = 0
 
         for boss in self.boss_data:
             name = boss.get("name", "Unknown")
@@ -245,14 +369,22 @@ class WorldBossApp:
             dt = datetime.fromtimestamp(enable_time)
             if dt <= now:
                 continue
+            if self.sleep_enabled.get() and self._in_sleep_zone(dt):
+                skipped_count += 1
+                continue
             try:
-                create_boss_event(service, name, dt)
+                minutes = int(self.reminder_var.get().split()[0])
+                create_boss_event(service, name, dt, minutes)
                 created_count += 1
             except Exception as e:
                 self._set_status(f"Error creating event for {name}: {e}")
                 return
 
-        self._set_status(f"Events created! ({created_count} upcoming bosses added)")
+        msg = f"Events created! ({created_count} added"
+        if skipped_count:
+            msg += f", {skipped_count} skipped — sleep zone"
+        msg += ")"
+        self._set_status(msg)
 
     def _set_status(self, message):
         now_str = datetime.now().strftime("%I:%M:%S %p")
@@ -265,6 +397,38 @@ class WorldBossApp:
             now_str = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
             self.status_var.set(f"Current time: {now_str}")
         self.root.after(1000, self._update_clock)
+
+    def _check_for_update(self):
+        def check():
+            try:
+                url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+                resp = requests.get(url, timeout=5)
+                if resp.status_code != 200:
+                    return
+                data = resp.json()
+                tag = data.get("tag_name", "")
+                latest = tag.lstrip("vV")
+                if latest and tuple(int(x) for x in latest.split(".")) > tuple(int(x) for x in VERSION.split(".")):
+                    html_url = data.get("html_url", "")
+                    self.root.after(0, self._show_update_bar, latest, html_url)
+            except Exception:
+                pass
+
+        threading.Thread(target=check, daemon=True).start()
+
+    def _show_update_bar(self, latest_version, release_url):
+        frame = ttk.Frame(self.root)
+        frame.pack(fill="x", side="bottom", padx=10, pady=(0, 2))
+
+        ttk.Label(
+            frame, text=f"Update available: v{latest_version}"
+        ).pack(side="left")
+
+        link = ttk.Label(
+            frame, text="Download", foreground="blue", cursor="hand2"
+        )
+        link.pack(side="left", padx=(6, 0))
+        link.bind("<Button-1>", lambda e: webbrowser.open(release_url))
 
 
 if __name__ == "__main__":
